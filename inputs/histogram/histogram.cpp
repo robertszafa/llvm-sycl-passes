@@ -25,10 +25,20 @@ double histogram_kernel(queue &q, const std::vector<int> &h_idx, std::vector<flo
   auto event = q.submit([&](handler &hnd) {
     hnd.single_task<MainKernel>([=]() [[intel::kernel_args_restrict]] {
       /////////////////////////////////// KERNEL CODE /////////////////////////////////////////////
-      for (int i = 0; i < array_size; ++i) {
+      for (int i = 0; i < array_size - 11; ++i) {
         auto idx_scalar = idx[i];
         auto x = hist[idx_scalar];
-        hist[idx_scalar] = x + 10.0;
+        hist[idx_scalar] = x * 10.0;
+        hist[idx_scalar + 1] = x * 10.0;
+        hist[idx_scalar + 2] = x * 10.0;
+        hist[idx_scalar + 3] = x * 10.0;
+        hist[idx_scalar + 4] = x * 10.0;
+        hist[idx_scalar + 5] = x * 10.0;
+        hist[idx_scalar + 6] = x * 10.0;
+        hist[idx_scalar + 7] = x * 10.0;
+        hist[idx_scalar + 8] = x * 10.0;
+        hist[idx_scalar + 9] = x * 10.0;
+        hist[idx_scalar + 10] = x * 10.0;
       }
       /////////////////////////////////// KERNEL CODE /////////////////////////////////////////////
     });

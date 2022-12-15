@@ -66,6 +66,24 @@ CallInst* getNthPipeCall(Function &F, const int n) {
   return nullptr;
 }
 
+/// Returns store instructions writing to the pipe write operand pointer.
+/// There can be more thna 1 such store if the pointer points to an aggregate.
+SmallVector<StoreInst *> getStoresToPipeOperand(CallInst *pipeWriteCall) {
+  SmallVector<StoreInst *> stores;
+  for (auto user : pipeWriteCall->getArgOperand(0)->users()) {
+    if (auto gep = dyn_cast<GetElementPtrInst>(user)) {
+      for (auto userGEP : gep->users()) {
+        if (auto stInstr = dyn_cast<StoreInst>(userGEP)) {
+          stores.emplace_back(stInstr);
+          break;
+        }
+      }
+    }
+  }
+
+  return stores;
+}
+
 void deleteInstruction(Instruction *inst) {
   inst->dropAllReferences();
   inst->replaceAllUsesWith(UndefValue::get(inst->getType()));
@@ -110,17 +128,7 @@ void transformAddressGeneration(Function &F, FunctionAnalysisManager &AM, Instru
                                 Value *baseTagAddr, CallInst *pipeWriteCall,
                                 SmallVector<Instruction *> &preserveInst) {
   // {address, tag} request struct store instructions.
-  SmallVector<StoreInst *, 2> storesToIdxTagStruct;
-  for (auto user : pipeWriteCall->getArgOperand(0)->users()) {
-    if (auto gep = dyn_cast<GetElementPtrInst>(user)) {
-      for (auto userGEP : gep->users()) {
-        if (auto stInstr = dyn_cast<StoreInst>(userGEP)) {
-          storesToIdxTagStruct.emplace_back(stInstr);
-          break;
-        }
-      }
-    }
-  }
+  SmallVector<StoreInst *, 2> storesToIdxTagStruct = getStoresToPipeOperand(pipeWriteCall);
   auto tagStore = storesToIdxTagStruct[0];
   auto addressStore = storesToIdxTagStruct[1];
 
@@ -165,7 +173,7 @@ void transformMainKernel(Function &F, FunctionAnalysisManager &AM,
   SmallVector<CallInst*> loadPipeReadCalls(loads.size());
   SmallVector<CallInst*> storePipeWriteCalls(stores.size());
   CallInst* endSignalPipeWriteCall = getNthPipeCall(F, stores.size() + loads.size());
-  Value* storeReqValPtr = endSignalPipeWriteCall->getOperand(0);
+  Value* endStReqOperandPtr = endSignalPipeWriteCall->getOperand(0);
 
   for (size_t i=0; i<loads.size(); ++i) 
     loadPipeReadCalls[i] = getNthPipeCall(F, i);
@@ -185,9 +193,9 @@ void transformMainKernel(Function &F, FunctionAnalysisManager &AM,
     stores[iStore]->setOperand(1, storePipeWriteCalls[iStore]->getOperand(0));
     // Increment num_store_req value for every store_val_pipe write call.
     IRBuilder<> IR(stores[iStore]);
-    LoadInst *loadReqInstr = IR.CreateLoad(Type::getInt32Ty(IR.getContext()), storeReqValPtr);
+    LoadInst *loadReqInstr = IR.CreateLoad(Type::getInt32Ty(IR.getContext()), endStReqOperandPtr);
     Value *incReqVal = IR.CreateAdd(IR.getInt32(1), loadReqInstr);
-    IR.CreateStore(incReqVal, storeReqValPtr);
+    IR.CreateStore(incReqVal, endStReqOperandPtr);
   }
   
   // The end signal pipe should be called before every fn exit.
@@ -198,6 +206,63 @@ void transformMainKernel(Function &F, FunctionAnalysisManager &AM,
     }
   }
   endSignalPipeWriteCall->eraseFromParent();
+}
+
+void transformMainKernelManyStores(Function &F, FunctionAnalysisManager &AM,
+                                   SmallVector<Instruction *> &stores,
+                                   SmallVector<Instruction *> &loads) {
+  // Get pipe calls.
+  CallInst* endStReqPipeWriteCall = getNthPipeCall(F, stores.size() + loads.size());
+  CallInst* endStValPipeWriteCall = getNthPipeCall(F, stores.size() + loads.size() + 1);
+  Value* endStReqOperandPtr = endStReqPipeWriteCall->getOperand(0);
+  Value* endStValOperandPtr = endStValPipeWriteCall->getOperand(0);
+
+  SmallVector<CallInst*> loadPipeReadCalls(loads.size());
+  SmallVector<CallInst*> storePipeWriteCalls(stores.size());
+  for (size_t i=0; i<loads.size(); ++i) 
+    loadPipeReadCalls[i] = getNthPipeCall(F, i);
+  for (size_t i=0; i<stores.size(); ++i) 
+    storePipeWriteCalls[i] = getNthPipeCall(F, i + loads.size());
+
+  // Replace load instructions with calls to pipe::read
+  for (size_t iLoad=0; iLoad<loads.size(); ++iLoad) {
+    loadPipeReadCalls[iLoad]->moveBefore(loads[iLoad]);
+    Value* loadVal = dyn_cast<Value>(loads[iLoad]);
+    loadVal->replaceAllUsesWith(loadPipeReadCalls[iLoad]);
+  }
+
+  // Replace store instructions with calls to pipe::write
+  for (size_t iStore=0; iStore<stores.size(); ++iStore) {
+    auto stValPipeStructStores = getStoresToPipeOperand(storePipeWriteCalls[iStore]);
+    auto stValPipeStore = stValPipeStructStores[1];
+    auto stValTagPipeStore = stValPipeStructStores[0];
+
+    // Increment num_store_req value for every store_val_pipe write call.
+    IRBuilder<> IR(stores[iStore]);
+    LoadInst *loadReqInstr = IR.CreateLoad(Type::getInt32Ty(IR.getContext()), endStReqOperandPtr);
+    Value *incReqVal = IR.CreateAdd(IR.getInt32(1), loadReqInstr);
+    IR.CreateStore(incReqVal, endStReqOperandPtr);
+    IR.CreateStore(incReqVal, endStValOperandPtr);
+
+    // Swap the store pointer for the pointer to the pipe operand. 
+    storePipeWriteCalls[iStore]->moveAfter(stores[iStore]);
+    stValTagPipeStore->moveBefore(storePipeWriteCalls[iStore]);
+    // Tag this store value.
+    stValTagPipeStore->setOperand(0, incReqVal);
+    stores[iStore]->setOperand(1, stValPipeStore->getOperand(1));
+  }
+  
+  // The end signal pipes should be called before every fn exit.
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      if (isa<ReturnInst>(I)) {
+        endStReqPipeWriteCall->clone()->insertBefore(&I);
+        endStValPipeWriteCall->clone()->insertBefore(&I);
+      }
+    }
+  }
+  endStReqPipeWriteCall->eraseFromParent();
+  endStValPipeWriteCall->eraseFromParent();
 }
 
 /// Given json file name, return llvm::json::Value
@@ -275,7 +340,11 @@ struct LoadStoreQueueTransform : PassInfoMixin<LoadStoreQueueTransform> {
           }
           
           if (!isAddressGenKernel) {
-            transformMainKernel(F, AM, stores, loads);
+            errs() << "\n* NOW MAIN KERNEL* \n\n";
+            if (stores.size() > 2)
+              transformMainKernelManyStores(F, AM, stores, loads);
+            else
+              transformMainKernel(F, AM, stores, loads);
           }
         }
           

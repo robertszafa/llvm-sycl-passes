@@ -230,7 +230,8 @@ void analyseRAW(Function &F, FunctionAnalysisManager &AM) {
         std::all_of(memInstrsAll.begin(), memInstrsAll.end(), [&](auto memInstrs) {
           return canDecoupleAddressGenFromCompute(F, AM, memInstrs);
         });
-    report["decouple_address"] = int(canDecoupleAddress);
+    // report["decouple_address"] = int(canDecoupleAddress);
+    report["decouple_address"] = int(0);
 
     outs() << formatv("{0:2}", json::Value(std::move(report))) << "\n";
 

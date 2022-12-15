@@ -13,7 +13,19 @@ import json
 
 # TODO: get queue name from llvm pass
 Q_NAME = 'q'
-STOREQ_HEADER = '#include "store_queue.hpp"\n#include <type_traits>'
+STOREQ_HEADER = '''
+#include "store_queue.hpp"
+#include <type_traits>
+
+#include "pipe_utils.hpp"
+#include "tuple.hpp"
+#include "unrolled_loop.hpp"
+#include "constexpr_math.hpp"
+using namespace fpga_tools;
+
+template <typename T>
+struct st_val_pair { T first;  int second; };
+'''
 
 # This has false positives but we use it only on strings that have a variable name at the beginning
 c_var_regex = r'([a-zA-Z_][a-zA-Z0-9_]*)'
@@ -44,7 +56,116 @@ def gen_store_queue_syntax(report, q_size):
                            kNumLoads_{i_base}, kQueueSize_{i_base}>({Q_NAME});
         '''
 
+        if base_addr['num_stores'] > 2:
+            all_lsq_pipes += f'''
+            using st_req_pipes_{i_base} = PipeArray<class st_req_pipes_{i_base}_class, {IDX_TAG_TYPE}, {PIPE_DEPTH}, {base_addr['num_stores']}>;
+            using st_val_pipes_{i_base} = PipeArray<class st_val_pipes_{i_base}_class, st_val_pair<{base_addr['array_type']}>, {PIPE_DEPTH}, {base_addr['num_stores']}>;
+            
+            using end_st_val_merge_pipe_{i_base} = pipe<class end_st_val_merge_pipe_{i_base}_class, int>;
+            using end_st_req_merge_pipe_{i_base} = pipe<class end_st_req_merge_pipe_{i_base}_class, int>;
+            '''
+
     return all_lsq_pipes
+
+def gen_store_merge_kernels(report):
+    result = ''
+
+    for i_base, base_addr in enumerate(report['base_addresses']):
+        num_stores = base_addr['num_stores']
+
+        if num_stores > 2:
+            result += f'''\n\nq.submit([&](handler &hnd) {{
+            hnd.single_task<class StoreReqMerge_{i_base}>([=]() [[intel::kernel_args_restrict]] {{
+            int nextTag = 1;
+            constexpr int kNumStores = {num_stores};
+            NTuple<bool, kNumStores> flags;
+            UnrolledLoop<kNumStores>([&](auto k) {{
+                flags. template get<k>() = false;
+            }});
+
+            NTuple<request_lsq_t, kNumStores> stReqs;
+
+            bool end = false;
+            int maxTag;
+            //[[intel::ivdep]]
+            [[intel::initiation_interval(2)]]
+            while (!end || nextTag <= maxTag) {{
+                UnrolledLoop<kNumStores>([&](auto k) {{
+                bool succ = false;
+                if (!flags. template get<k>()) {{
+                    stReqs. template get<k>() = st_req_pipes_{i_base}::PipeAt<k>::read(succ);
+                    flags. template get<k>() = succ;
+                }}
+                }});
+                
+                request_lsq_t nextReq;
+                bool gotNext = false;
+                UnrolledLoop<kNumStores>([&](auto k) {{
+                if (!gotNext && stReqs. template get<k>().second == nextTag) {{
+                    nextReq = stReqs. template get<k>();            
+                    flags. template get<k>() = false;
+                    gotNext = true;
+                }}
+                }});
+
+
+                if (gotNext) {{
+                    st_idx_pipe_{i_base}::write(nextReq);
+                    nextTag++;
+                }}
+                
+                if (!end) 
+                    maxTag = end_st_req_merge_pipe_{i_base}::read(end);
+            }}
+            end_lsq_signal_pipe_{i_base}::write(maxTag);
+            }});}});'''
+
+            result += f'''\n\nq.submit([&](handler &hnd) {{
+            hnd.single_task<class StoreValueMerge_{i_base}>([=]() [[intel::kernel_args_restrict]] {{
+            int nextTag = 1;
+            constexpr int kNumStores = {num_stores};
+            NTuple<bool, kNumStores> flags;
+            UnrolledLoop<kNumStores>([&](auto k) {{
+                flags. template get<k>() = false;
+            }});
+
+            NTuple<st_val_pair<{base_addr['array_type']}>, kNumStores> stVals;
+
+            bool end = false;
+            int maxTag;
+            //[[intel::ivdep]]
+            [[intel::initiation_interval(2)]]
+            while (!end || nextTag <= maxTag) {{
+                UnrolledLoop<kNumStores>([&](auto k) {{
+                bool succ = false;
+                if (!flags. template get<k>()) {{
+                    stVals. template get<k>() = st_val_pipes_{i_base}::PipeAt<k>::read(succ);
+                    flags. template get<k>() = succ;
+                }}
+                }});
+                
+                st_val_pair<{base_addr['array_type']}> nextVal;
+                bool gotNext = false;
+                UnrolledLoop<kNumStores>([&](auto k) {{
+                if (stVals. template get<k>().second == nextTag) {{
+                    nextVal = stVals. template get<k>();            
+                    flags. template get<k>() = false;
+                    gotNext = true;
+                }}
+                }});
+
+
+                if (gotNext) {{
+                    st_val_pipe_{i_base}::write(nextVal.first);
+                    nextTag++;
+                }}
+                
+                if (!end)
+                    maxTag = end_st_val_merge_pipe_{i_base}::read(end);
+            }}
+            }});}});'''
+        
+    return result
 
 
 def insert_storeq_wait(src, original_kernel_start):
@@ -74,7 +195,10 @@ def add_agu_pipe_connections(kernel_body, report):
         for i in range(base_addr['num_loads']):
             agu_pipe_writes.append(f'ld_idx_pipes_{i_base}::PipeAt<{i}>::write({{0, 0}});\n')
         for i in range(base_addr['num_stores']):
-            agu_pipe_writes.append(f'st_idx_pipe_{i_base}::write({{0, 0}});\n')
+            if base_addr['num_stores'] > 2:
+                agu_pipe_writes.append(f'st_req_pipes_{i_base}::PipeAt<{i}>::write({{0, 0}});\n')
+            else:
+                agu_pipe_writes.append(f'st_idx_pipe_{i_base}::write({{0, 0}});\n')
 
     agu_kernel_body = kernel_body_lines[:1] + agu_pipe_writes + kernel_body_lines[1:] 
     return agu_kernel_body, agu_pipe_writes
@@ -89,16 +213,26 @@ def gen_val_pipe_connections(report):
             for i in range(base_addr['num_loads']):
                 pipe_calls.append(f'ld_idx_pipes_{i_base}::PipeAt<{i}>::write({{0, 0}});\n')
             for i in range(base_addr['num_stores']):
-                pipe_calls.append(f'st_idx_pipe_{i_base}::write({{0, 0}});\n')
+                if base_addr['num_stores'] > 2:
+                    pipe_calls.append(f'st_req_pipes_{i_base}::PipeAt<{i}>::write({{0, 0}});\n')
+                else:
+                    pipe_calls.append(f'st_idx_pipe_{i_base}::write({{0, 0}});\n')
             
         for i in range(base_addr['num_loads']):
             pipe_calls.append(f'auto ld_val_pipe_{i_base}_rd_{i} = ld_val_pipes_{i_base}::PipeAt<{i}>::read();')
 
         for i in range(base_addr['num_stores']):
-            pipe_calls.append(f'st_val_pipe_{i_base}::write(val_type_{i_base}());')
+            if base_addr['num_stores'] > 2:
+                pipe_calls.append(f'st_val_pipes_{i_base}::PipeAt<{i}>::write({{0, 0}});\n')
+            else:
+                pipe_calls.append(f'st_val_pipe_{i_base}::write(val_type_{i_base}());')
         
         pipe_calls.append(f'int __total_store_req_{i_base} = 0;')
-        pipe_calls.append(f'end_lsq_signal_pipe_{i_base}::write(__total_store_req_{i_base});')
+        if base_addr['num_stores'] > 2:
+            pipe_calls.append(f'end_st_req_merge_pipe_{i_base}::write(__total_store_req_{i_base});')
+            pipe_calls.append(f'end_st_val_merge_pipe_{i_base}::write(__total_store_req_{i_base});')
+        else:
+            pipe_calls.append(f'end_lsq_signal_pipe_{i_base}::write(__total_store_req_{i_base});')
     
     return pipe_calls
 
@@ -183,6 +317,8 @@ if __name__ == '__main__':
     agu_kernel_body, agu_pipe_writes = add_agu_pipe_connections(kernel_body, report)
     main_kernel_pipes = gen_val_pipe_connections(report)
 
+    store_merge_kernels = gen_store_merge_kernels(report)
+
     storeq_syntax = gen_store_queue_syntax(report, Q_SIZE)
 
     agu_kernel = f'{Q_NAME}.single_task<{agu_kernel_name}>{"".join(agu_kernel_body)}'
@@ -198,7 +334,7 @@ if __name__ == '__main__':
 
     src_lines_with_pipes_and_agu = [STOREQ_HEADER, agu_kernel_class_decl] + \
                                    src_lines_with_pipes[:insert_line_idx_kernels] + \
-                                   [storeq_syntax]
+                                   [storeq_syntax] + [store_merge_kernels]
 
     if report['decouple_address']:
         src_lines_with_pipes_and_agu += ["\n/// AGU", agu_kernel, "/// END AGU\n"]

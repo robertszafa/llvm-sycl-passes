@@ -62,32 +62,6 @@ double chaos_ncg_kernel(queue &q, int I, int bo, int X, int Y, int params0, int 
 
 
 enum data_distribution { ALL_WAIT, NO_WAIT, PERCENTAGE_WAIT };
-void init_data(std::vector<int> &buffer, std::vector<int> &addr_in, std::vector<int> &addr_out,
-               const data_distribution distr, const uint percentage) {
-  std::default_random_engine generator;
-  std::uniform_int_distribution<int> distribution(0, 100);
-  auto dice = std::bind(distribution, generator);
-
-
-  
-
-
-  for (int i = 0; i < buffer.size(); i++) {
-    buffer[i] = (i % 2 == 0) ? rand()%1000 : 30000;
-
-    if (distr == data_distribution::ALL_WAIT) {
-      addr_in[i] = std::max(i - 1, 0);
-      addr_out[i] = std::min(max(i + 1, 0), int(buffer.size()-1));
-    } else if (distr == data_distribution::NO_WAIT) {
-      addr_in[i] = i;
-      addr_out[i] = i;
-    } else {
-      addr_in[i] = (dice() <= percentage) ? std::max(i - 1, 0) : i;
-      addr_out[i] = addr_in[i];
-    }
-  }
-}
-
 
 void chaos_ncg_cpu(int I, int bo, int X, int Y, int params0, int params1, 
                    const std::vector<int> &M, std::vector<int> &buffer) {
@@ -176,9 +150,13 @@ int main(int argc, char *argv[]) {
     std::vector<int> buffer(BO*3);
 
     // init_data - no easy way to control ALL_WAIT, NO_WAIT, PERCENTAGE_WAIT
-    int I = 10, X = 250, Y = 250;
+    int I = 2, X = 250, Y = 250;
     for (int i = 0; i < BO*3; i++) {
-      M[i] = rand() % BO;
+      if (DATA_DISTR == data_distribution::NO_WAIT)
+        M[i] = i % BO;
+      else
+        M[i] = i % 4;
+
       buffer[i] = rand() % BO;
     }
     // init_data

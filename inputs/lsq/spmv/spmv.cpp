@@ -72,8 +72,8 @@ void init_data(std::vector<float> &matrix, std::vector<float> &a, std::vector<in
       col_index[r] = r;
       row_ptr[r] = r;
     } else {
-      col_index[r] = (dice() <= percentage) ? col_index[std::max(r - 1, 0)] : r;
-      row_ptr[r] = (dice() <= percentage) ? row_ptr[std::max(r - 1, 0)] : r;
+      col_index[r] = (dice() <= percentage) ? std::max(r - 1, 0) : r;
+      row_ptr[r] = (dice() <= percentage) ? std::max(r - 1, 0) : r;
     }
 
     a[r] = 1.0;
@@ -95,6 +95,22 @@ static auto exception_handler = [](sycl::exception_list e_list) {
     }
   }
 };
+
+template <class T>
+typename std::enable_if<!std::numeric_limits<T>::is_integer, bool>::type
+almost_equal(T x, T y) {
+  std::ostringstream xSS, ySS;
+  xSS << x;
+  ySS << y;
+  if (x == y || xSS.str() == ySS.str())
+    return true;
+  // the machine epsilon has to be scaled to the magnitude of the values used
+  // and multiplied by the desired precision in ULPs (units in the last place)
+  return std::fabs(x - y) <=
+             std::numeric_limits<T>::epsilon() * std::fabs(x + y) * 2
+         // unless the result is subnormal
+         || std::fabs(x - y) < std::numeric_limits<T>::min();
+}
 
 int main(int argc, char *argv[]) {
   // Get A_SIZE and forward/no-forward from args.
@@ -153,7 +169,13 @@ int main(int argc, char *argv[]) {
 
     std::cout << "Kernel time (ms): " << kernel_time << "\n";
 
+    for (int i=0; i<matrix.size(); ++i) {
+      if (!almost_equal((matrix[i]), golden_matrix[i])) {
+        std::cout << i << ": fpga " << matrix[i] << ", cpu " << golden_matrix[i] << "\n";
+      }
+    }
     if (std::equal(matrix.begin(), matrix.end(), golden_matrix.begin())) {
+                  //  [](auto i, auto j) { return almost_equal(i, j); })) {
       std::cout << "Passed\n";
     } else {
       std::cerr << "Failed";

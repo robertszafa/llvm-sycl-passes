@@ -29,12 +29,13 @@ double sssp_kernel(queue & q, const std::vector<int> &h_G, std::vector<int> &h_c
   auto event = q.single_task<MainKernel>([=]() [[intel::kernel_args_restrict]] {
     int count = 1;
     while (count < numNodes - 1) {
-      int mindistance = INT_MAX;
+      int mindist = INT_MAX;
       int nextnode = 0;
       // nextnode gives the node at minimum distance
       for (int i = 0; i < numNodes; i++) {
-        if (distance[i] < mindistance && !visited[i]) {
-          mindistance = distance[i];
+        bool isvis = visited[i];
+        if (distance[i] < mindist && !isvis) {
+          mindist = distance[i];
           nextnode = i;
         }
       }
@@ -43,9 +44,9 @@ double sssp_kernel(queue & q, const std::vector<int> &h_G, std::vector<int> &h_c
       visited[nextnode] = 1;
 
       for (int i = 0; i < numNodes; i++) {
-        if (!visited[i] &&
-            mindistance + cost[nextnode * numNodes + i] < distance[i]) {
-          distance[i] = mindistance + cost[nextnode * numNodes + i];
+        bool isvis = visited[i];
+        if (mindist + cost[nextnode * numNodes + i] < distance[i] && !isvis) {
+          distance[i] = mindist + cost[nextnode * numNodes + i];
           pred[i] = nextnode;
         }
       }
@@ -79,7 +80,8 @@ void sssp_cpu(const std::vector<int> &G, std::vector<int> &cost,
     int nextnode = 0;
     // nextnode gives the node at minimum distance
     for (int i = 0; i < numNodes; i++) {
-      if (distance[i] < mindistance && !visited[i]) {
+      bool isvis = visited[i];
+      if (distance[i] < mindistance && !isvis) {
         mindistance = distance[i];
         nextnode = i;
       }
@@ -88,7 +90,8 @@ void sssp_cpu(const std::vector<int> &G, std::vector<int> &cost,
     // check if a better path exists through nextnode
     visited[nextnode] = 1;
     for (int i = 0; i < numNodes; i++) {
-      if (!visited[i] && mindistance + cost[nextnode * numNodes + i] < distance[i]) {
+        bool isvis = visited[i];
+      if (mindistance + cost[nextnode * numNodes + i] < distance[i] && !isvis) {
         distance[i] = mindistance + cost[nextnode * numNodes + i];
         pred[i] = nextnode;
       }

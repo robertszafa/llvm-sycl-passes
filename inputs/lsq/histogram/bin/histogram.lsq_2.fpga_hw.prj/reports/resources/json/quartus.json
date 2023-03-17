@@ -1,0 +1,62 @@
+{
+  "quartusFitClockSummary"         : {
+      "nodes" : [{
+          "name"              : "Quartus Fitter: Clock Frequency (MHz)",
+          "kernel clock"      : "242.00",
+          "kernel clock fmax" : "242.00",
+          "clock1x"           : "242.00",
+          "clock2x"           : "484.00",
+          "details"           : [{
+              "text" : "The actual frequency of kernel clock is 242.00 MHz after platform PLL adjustment. The maximum frequency for kernel clock is 242.00 MHz. "
+          }],
+          "type"              : "system"
+      }]
+  },
+  "quartusFitResourceUsageSummary" : {
+      "nodes" : [{
+          "type" : "system",
+          "id"   : "1000",
+          "name" : "Quartus Fitter: Kernel System",
+          "alm"  : "17748.9",
+          "reg"  : "22231",
+          "dsp"  : "1",
+          "ram"  : "31",
+          "mlab" : "733"
+      },{
+          "type" : "kernel",
+          "id"   : "1010",
+          "name" : "ZTS10MainKernel",
+          "alm"  : "186.7",
+          "reg"  : "199",
+          "dsp"  : "1",
+          "ram"  : "0",
+          "mlab" : "3"
+      },{
+          "type" : "kernel",
+          "id"   : "1010",
+          "name" : "ZTS16MainKernel_AGU_0",
+          "alm"  : "649.8",
+          "reg"  : "766",
+          "dsp"  : "0",
+          "ram"  : "13",
+          "mlab" : "5"
+      },{
+          "type" : "kernel",
+          "id"   : "1010",
+          "name" : "ZTSN4sycl3_V13ext5intel4pipeIZ16histogram_kernelRNS0_5queueERKSt6vectorIiSaIiEERS6_IfSaIfEEE27pipe_e",
+          "alm"  : "1268.1",
+          "reg"  : "1893",
+          "dsp"  : "0",
+          "ram"  : "0",
+          "mlab" : "19"
+      },{
+          "type" : "aclsystem",
+          "id"   : "1001",
+          "name" : "Quartus Fitter: Total Used (Entire System)",
+          "alm"  : "84,611",
+          "reg"  : "118,003",
+          "dsp"  : "1",
+          "ram"  : "388"
+      }]
+  }
+}

@@ -33,7 +33,9 @@ double maximal_matching_kernel(queue &q, const std::vector<int> &h_edges, std::v
       int e1 = edges[j];
       int e2 = edges[j + 1];
 
-      if ((vertices[e1] < 0) && (vertices[e2] < 0)) {
+      auto v1 = vertices[e1];
+      auto v2 = vertices[e2];
+      if (v1 < 0 && v2 < 0) {
         vertices[e1] = e2;
         vertices[e2] = e1;
 
@@ -55,28 +57,6 @@ double maximal_matching_kernel(queue &q, const std::vector<int> &h_edges, std::v
   double time_in_ms = static_cast<double>(end - start) / 1000000;
 
   return time_in_ms;
-}
-
-
-void maximal_matching_cpu(const int *idx, const int *weight, float *hist, const int N) {
-  for (int i = 0; i < N; ++i) {
-    auto wt = weight[i];
-    auto idx_scalar = idx[i];
-    auto x = hist[idx_scalar];
-
-    if (wt > 0) {
-      hist[idx_scalar] = x + 10.0;
-    }
-    else if (wt == 0) {
-      if (idx_scalar == 1)
-        hist[idx_scalar] = x * 2.0;
-      else
-        hist[idx_scalar] = x - 20.0;
-    }
-    else {
-      hist[idx_scalar] = x - 10.0; 
-    }
-  }
 }
 
 enum data_distribution { ALL_WAIT, NO_WAIT, PERCENTAGE_WAIT };
